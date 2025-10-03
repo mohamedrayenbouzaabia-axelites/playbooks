@@ -18,7 +18,10 @@ API_KEY_ENV = "NEWSDATA_API_KEY"
 mcp = FastMCP("News MCP Server")
 
 
-def _get_api_key() -> str:
+def _get_api_key(explicit: Optional[str] = None) -> str:
+    if explicit:
+        return explicit
+
     api_key = os.environ.get(API_KEY_ENV)
     if not api_key:
         raise RuntimeError(
@@ -45,16 +48,17 @@ CATEGORY_ALIASES = {
 }
 
 
-@mcp.tool
+@mcp.tool(exclude_args=["api_key"])
 def get_top_headlines(
     country: str,
     category: str = "general",
     language: str = "en",
     query: Optional[str] = None,
     page_size: int = 5,
+    api_key: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Return top headlines for a country/category using newsdata.io."""
-    api_key = _get_api_key()
+    api_key = _get_api_key(api_key)
 
     normalized_country = country.lower() if country else None
     if normalized_country and len(normalized_country) != 2:
