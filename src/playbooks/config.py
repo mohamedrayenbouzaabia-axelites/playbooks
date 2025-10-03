@@ -36,8 +36,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")  # catch typos early
 
-    provider: str = "anthropic"
-    name: str = "claude-sonnet-4-20250514"
+    provider: str = "openai"  # "openai" or "anthropic"
+    name: str = "gpt-4o"  # e.g. "gpt-4o", "claude-sonnet-4-20250514"
     temperature: float = Field(0.2, ge=0, le=2.0)
 
 

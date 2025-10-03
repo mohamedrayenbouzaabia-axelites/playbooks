@@ -311,10 +311,33 @@ class MCPAgent(RemoteAIAgent, metaclass=MCPAgentMeta):
                                 kwargs = {f"arg_{i}": arg for i, arg in enumerate(args)}
 
                         result = await self.transport.call_tool(tool_name, kwargs)
-                        result_str = str(result.content[0].text)
-                        if result.is_error:
-                            result_str = f"Error: {result_str}"
-                        return result_str
+
+                        # Extract structured content first if provided
+                        if hasattr(result, "structured_content") and result.structured_content:
+                            payload = result.structured_content
+                        else:
+                            payload = None
+
+                        # Fall back to textual content blocks
+                        if payload is None and hasattr(result, "content"):
+                            texts = []
+                            for block in result.content:
+                                text = getattr(block, "text", None)
+                                if text is not None:
+                                    texts.append(text)
+                            if texts:
+                                payload = texts[0] if len(texts) == 1 else texts
+
+                        # Handle explicit MCP tool errors
+                        if getattr(result, "is_error", False):
+                            message = payload if payload is not None else str(result)
+                            raise RuntimeError(f"Error calling tool '{tool_name}': {message}")
+
+                        if payload is not None:
+                            return payload
+
+                        # Final fallback to raw result
+                        return result
 
                     return execute_fn
 

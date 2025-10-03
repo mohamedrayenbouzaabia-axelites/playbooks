@@ -5,6 +5,13 @@
   "version": "0.2.0",
   "configurations": [
     {
+  "type": "playbooks",
+  "request": "attach",
+  "name": "Attach to Playbooks Server",
+  "port": 7529,
+  "host": "127.0.0.1"
+},
+    {
       "name": "Command line agent chat",
       "type": "debugpy",
       "request": "launch",

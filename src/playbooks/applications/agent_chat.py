@@ -12,7 +12,7 @@ import select
 import sys
 import uuid
 from pathlib import Path
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 # Platform-specific imports for stdin clearing
 try:
@@ -30,7 +30,7 @@ from rich.console import Console
 
 from playbooks import Playbooks
 from playbooks.agents.messaging_mixin import MessagingMixin
-from playbooks.constants import EOM, EXECUTION_FINISHED
+from playbooks.constants import EOM, EXECUTION_FINISHED, HUMAN_AGENT_KLASS
 from playbooks.debug_logger import debug
 from playbooks.events import Event
 from playbooks.exceptions import ExecutionFinished
@@ -40,6 +40,7 @@ from playbooks.program import Program
 from playbooks.session_log import SessionLogItemLevel
 from playbooks.user_output import user_output
 from playbooks.utils.error_utils import check_playbooks_health
+from playbooks.utils.spec_utils import SpecUtils
 
 # Add the src directory to the Python path to import playbooks
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -167,13 +168,14 @@ class SessionLogWrapper:
 original_wait_for_message = MessagingMixin.WaitForMessage
 original_broadcast_to_meeting = None  # Will be set after MeetingManager is imported
 original_route_message = None  # Will be set after Program is loaded
+primary_chat_agent_id: Optional[str] = None
 
 
 @functools.wraps(original_wait_for_message)
 async def patched_wait_for_message(self, source_agent_id: str):
     """Patched version of WaitForMessage that shows a prompt when waiting for human input."""
     # For human input, show a prompt before calling the normal WaitForMessage
-    if source_agent_id == "human":
+    if source_agent_id in {"human", "*"}:
         # Check if there are already messages waiting
         messages = self._message_buffer
         human_messages = [msg for msg in messages if msg.sender_id == "human"]
@@ -184,7 +186,7 @@ async def patched_wait_for_message(self, source_agent_id: str):
             # Clear stdin buffer to prevent pre-filled input
             await asyncio.to_thread(clear_stdin)
             user_input = await asyncio.to_thread(
-                console.input, "[bold yellow]User:[/bold yellow] "
+                console.input, "[bold yellow]user:[/bold yellow] "
             )
             # Send the user input and EOM
             program: Program = self.program
@@ -198,6 +200,57 @@ async def patched_wait_for_message(self, source_agent_id: str):
 
     # Call the normal WaitForMessage which handles message delivery
     return await original_wait_for_message(self, source_agent_id)
+
+
+def _select_primary_chat_agent(program: Program) -> Optional[str]:
+    """Choose the agent that should receive free-form user input by default."""
+
+    for agent in program.agents:
+        if agent.klass == HUMAN_AGENT_KLASS:
+            continue
+        metadata = getattr(agent, "metadata", {}) or {}
+        if metadata.get("remote"):
+            # Skip pure transport adapters; we want the conversation agent
+            continue
+        return agent.id
+    return None
+
+
+async def _maybe_collect_initial_message(program: Program) -> None:
+    """Prompt once for an initial user utterance before entering the main loop."""
+
+    global primary_chat_agent_id
+    if not primary_chat_agent_id:
+        return
+
+    try:
+        console.print(
+            "\n[dim]Type a message to kick things off, or press Enter to wait for the agent.[/dim]"
+        )
+        user_input = await asyncio.to_thread(
+            console.input, "[bold yellow]user:[/bold yellow] "
+        )
+    except (KeyboardInterrupt, EOFError):
+        console.print()
+        return
+
+    if not user_input.strip():
+        return
+
+    # Route the message (and implicit EOM) to the selected chat agent
+    target_spec = SpecUtils.to_agent_spec(primary_chat_agent_id)
+    await program.route_message(
+        sender_id="human",
+        sender_klass="human",
+        receiver_spec=target_spec,
+        message=user_input,
+    )
+    await program.route_message(
+        sender_id="human",
+        sender_klass="human",
+        receiver_spec=target_spec,
+        message=EOM,
+    )
 
 
 async def patched_broadcast_to_meeting_as_owner(
@@ -315,6 +368,9 @@ async def main(
         user_output.error("Authentication error", details=str(e))
         raise
 
+    global primary_chat_agent_id
+    primary_chat_agent_id = _select_primary_chat_agent(playbooks.program)
+
     # Store original methods and apply patches after playbooks are loaded
     global original_broadcast_to_meeting, original_route_message
     original_broadcast_to_meeting = MeetingManager.broadcast_to_meeting_as_owner
@@ -362,6 +418,8 @@ async def main(
 
     # Start the program
     try:
+        await _maybe_collect_initial_message(playbooks.program)
+
         if verbose:
             playbooks.event_bus.subscribe("*", log_event)
         await playbooks.program.run_till_exit()

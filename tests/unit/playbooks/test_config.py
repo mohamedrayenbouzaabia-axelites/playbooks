@@ -157,8 +157,8 @@ def test_model_fallback_to_default(tmp_path, monkeypatch):
         """
 timeout_s = 60
 [model]
-provider = "anthropic"
-name = "claude-3-opus"
+provider = "openai"
+name = "gpt-4o"
 temperature = 0.8
 """,
     )
